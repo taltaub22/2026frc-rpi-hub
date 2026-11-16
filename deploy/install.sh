@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Runs ON the Pi, as root. Usage: sudo ./deploy/install.sh server|peer [--no-network]
+# Fallback to the zero-touch cloud-init image (docs/flashing.md): same result, done over SSH on an already-running Pi.
 # Installs fuelhub as a systemd service, sets hostname and static IP from provision/roles/<role>.conf.
 # DRY_RUN=1 prints what would be done without changing anything.
 set -euo pipefail
@@ -22,11 +23,23 @@ unit="$(sed -e "s|@ROLE@|$ROLE|g" -e "s|@ALLIANCE@|$ALLIANCE|g" -e "s|@PEER_IP@|
 # 1. Dependencies: Raspberry Pi OS Lite ships python3-gpiozero + lgpio; only install if missing.
 python3 -c "import gpiozero" 2>/dev/null || run apt-get install -y python3-gpiozero python3-lgpio
 
-# 2. User and files
+# 2. User, role settings, updater, unit, first release (same layout the cloud-init image uses)
 id fuelhub >/dev/null 2>&1 || run useradd --system --groups gpio --shell /usr/sbin/nologin fuelhub
-run install -d /opt/fuelhub
-run install -m 0644 "$here/src/fuelhub.py" /opt/fuelhub/fuelhub.py
+run install -d /etc/fuelhub /var/lib/fuelhub
+write /etc/fuelhub/role.env "$(sed 's/#.*//' "$here/provision/roles/$role.conf" | grep =; echo PORT=502)"
+run install -m 0755 "$here/deploy/fuelhub-apply.sh" /usr/local/sbin/fuelhub-apply
 write /etc/systemd/system/fuelhub.service "$unit"
+ver="$(cat "$here/VERSION" 2>/dev/null || echo manual-$(date +%Y%m%d%H%M%S))"
+if [[ "${DRY_RUN:-0}" != 1 ]]; then
+  tmp="$(mktemp -d)"; cp "$here/src/fuelhub.py" "$tmp/"; echo "$ver" > "$tmp/VERSION"
+  tar -C "$tmp" -czf /var/lib/fuelhub/seed.tar.gz fuelhub.py VERSION
+  (cd /var/lib/fuelhub && sha256sum seed.tar.gz > seed.tar.gz.sha256); rm -rf "$tmp"
+else
+  echo "+ build /var/lib/fuelhub/seed.tar.gz ($ver)"
+fi
+run systemctl daemon-reload
+run systemctl enable fuelhub
+run /usr/local/sbin/fuelhub-apply /var/lib/fuelhub/seed.tar.gz --force
 
 # 3. Hostname
 run hostnamectl set-hostname "$HOSTNAME_NEW"
@@ -43,7 +56,4 @@ if [[ "$NETWORK" == 1 ]]; then
   fi
 fi
 
-# 5. Enable service (starts now, and at every boot)
-run systemctl daemon-reload
-run systemctl enable --now fuelhub
-echo "Installed $ROLE ($ALLIANCE hub). Reboot to apply the static IP $IP, then run provision/lock-root.sh once verified."
+echo "Installed $ROLE ($ALLIANCE hub). Reboot to apply the static IP $IP, then run provision/verify.sh."

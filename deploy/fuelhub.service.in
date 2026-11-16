@@ -5,9 +5,10 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/bin/python3 /opt/fuelhub/fuelhub.py @SERVE_FLAG@--alliance @ALLIANCE@ --peer @PEER_IP@ --port 502
+ExecStart=/usr/bin/python3 /opt/fuelhub/current/fuelhub.py @SERVE_FLAG@--alliance @ALLIANCE@ --peer @PEER_IP@ --port 502
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 Restart=always
+RuntimeDirectory=fuelhub
 RestartSec=1
 User=fuelhub
 Group=fuelhub

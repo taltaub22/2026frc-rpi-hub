@@ -11,11 +11,11 @@ with real sensors, or against a running Cheesy Arena.
 
 ## Layout
 - `src/fuelhub.py` - the counter + Modbus PLC emulator (stdlib only, `gpiozero` for GPIO)
-- `tests/` - unit + Modbus protocol tests (`python3 -m unittest discover -s tests`)
+- `tests/` - unit + Modbus protocol tests (`python3 -m unittest discover -s tests`; also `bash tests/test_apply.sh`)
 - `tools/modbus_probe.py` - mimics Cheesy Arena's poll; add `--reset` to test matchReset
-- `deploy/` - `install.sh` (runs on the Pi) and the systemd unit template
-- `provision/` - `deploy.sh` (laptop -> Pi), `verify.sh`, `lock-root.sh`, per-role settings in `roles/`
-- `docs/flashing.md` - **start here to set up a Pi**
+- `deploy/` - `fuelhub-apply.sh` (safe release installer on the Pi), systemd unit template, SSH install fallback
+- `provision/` - `make_sd_config.py` (zero-touch cloud-init), `flash.sh`, `ota.sh`, `verify.sh`, `deploy.sh`, role settings
+- `docs/flashing.md` - **start here: zero-touch flashing**; `docs/ota.md` - code updates over the network
 - `docs/wiring.md` - hub box wiring and channel map
 - `docs/cheesy-arena-integration.md` - register map and match-start requirements
 
@@ -33,10 +33,12 @@ python3 src/fuelhub.py --serve --alliance red --simulate --port 5020
 python3 tools/modbus_probe.py 127.0.0.1 --port 5020
 ```
 
-## Set up a Pi
-Flash Raspberry Pi OS Lite 64-bit, then `./provision/deploy.sh server user@fuelhub-red.local`
-(or `peer`), reboot, `./provision/verify.sh server user`, then lock the root filesystem.
-Full steps: `docs/flashing.md`. Port 502 is bound via `CAP_NET_BIND_SERVICE`.
+## Set up a Pi (no keyboard, mouse, or screen)
+`sudo ./provision/flash.sh server /dev/sdX` (or `peer`), put the card in the Pi, power it, wait 2 minutes,
+`./provision/verify.sh server`. Details and the GUI-Imager route: `docs/flashing.md`.
+
+## Update code later
+`./provision/ota.sh` : verified, versioned, health-checked, auto-rollback, refuses mid-match. See `docs/ota.md`.
 
 ## To do
 - Bench-measure PC817 module polarity (`active_high`) and tune `refractory_s` (start 30 ms)

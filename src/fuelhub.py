@@ -16,14 +16,30 @@ Bench test (no Pi): python3 fuelhub.py --serve --alliance red --simulate --port 
 import argparse
 import json
 import logging
+import os
 import random
 import socket
 import socketserver
 import struct
+import sys
 import threading
 import time
 
 log = logging.getLogger("fuelhub")
+
+PROTO = 1  # hub<->hub UDP protocol version; bump when the message format changes
+STATUS_PATH = "/run/fuelhub/status.json"  # tmpfs: no SD wear. Read by the OTA updater and selfcheck.
+
+
+def _read_version():
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")) as f:
+            return f.read().strip() or "dev"
+    except OSError:
+        return "dev"
+
+
+VERSION = _read_version()
 
 # ---- plc/plc.go map (index = iota order in the source) ----
 N_DI, N_HR, N_COIL = 28, 11, 13
@@ -63,6 +79,8 @@ class Store:
         self.coils = [0] * N_COIL
         self.epoch = 0
         self.on_reset = None  # callback(epoch) so the server can tell the peer
+        self.last_activity = None  # monotonic time of the last counted pulse (either hub)
+        self._warned_proto = False
 
     # -- local sensor events --
     def pulse(self, ch, now=None):
@@ -72,6 +90,7 @@ class Store:
                 return False
             self.last_pulse[ch] = now
             self.counts[self.local][ch] = (self.counts[self.local][ch] + 1) & 0xFFFF
+            self.last_activity = time.monotonic()
             return True
 
     def set_sensor(self, ch, level):
@@ -81,11 +100,26 @@ class Store:
     # -- remote hub data (server side) --
     def apply_remote(self, msg):
         with self.lock:
+            if msg.get("proto", PROTO) != PROTO:
+                if not self._warned_proto:
+                    log.warning("peer speaks UDP protocol %s, we speak %s: update both Pis", msg.get("proto"), PROTO)
+                    self._warned_proto = True
+                return False
             if msg.get("epoch") != self.epoch:
                 return False  # stale update from before the last reset
-            self.counts[self.remote] = [int(c) & 0xFFFF for c in msg["counts"]][:4]
+            new = [int(c) & 0xFFFF for c in msg["counts"]][:4]
+            if new != self.counts[self.remote]:
+                self.last_activity = time.monotonic()
+            self.counts[self.remote] = new
             self.sensors[self.remote] = [1 if s else 0 for s in msg["sensors"]][:4]
             return True
+
+    def status(self, role):
+        with self.lock:
+            age = None if self.last_activity is None else round(time.monotonic() - self.last_activity, 1)
+            return {"version": VERSION, "proto": PROTO, "role": role, "alliance": self.local,
+                    "epoch": self.epoch, "counts": {a: list(c) for a, c in self.counts.items()},
+                    "last_activity_age_s": age, "ts": time.time()}
 
     def reset(self, epoch=None):
         with self.lock:
@@ -226,7 +260,7 @@ def udp_sender(store, peer, port, stop, serving):
     while not stop.is_set():
         if not serving:  # peer pushes its counts ~10x/s (also acts as a heartbeat)
             with store.lock:
-                msg = {"type": "state", "epoch": store.epoch, "counts": store.counts[store.local],
+                msg = {"type": "state", "proto": PROTO, "epoch": store.epoch, "counts": store.counts[store.local],
                        "sensors": store.sensors[store.local]}
             s.sendto(json.dumps(msg).encode(), (peer, port))
         time.sleep(0.1)
@@ -237,6 +271,54 @@ def send_reset(peer, port, epoch):
     for _ in range(3):  # UDP: repeat; the epoch makes duplicates harmless
         s.sendto(json.dumps({"type": "reset", "epoch": epoch}).encode(), (peer, port))
         time.sleep(0.02)
+
+
+# ---- status file (read by OTA updater / selfcheck) ----
+def status_writer(store, path, role, stop):
+    warned = False
+    while not stop.is_set():
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(store.status(role), f)
+            os.replace(tmp, path)
+        except OSError as e:
+            if not warned:
+                log.warning("cannot write status file %s: %s", path, e)
+                warned = True
+        time.sleep(1)
+
+
+def selfcheck(path, serve, port):
+    """Exit code 0 if the running service looks healthy. Used by fuelhub-apply after an update."""
+    try:
+        with open(path) as f:
+            st = json.load(f)
+    except (OSError, ValueError) as e:
+        print("FAIL status file: %s" % e)
+        return 1
+    age = time.time() - st.get("ts", 0)
+    if age > 3:
+        print("FAIL status file is %.0f s old (service not running?)" % age)
+        return 1
+    if serve:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=2) as s:
+                s.sendall(struct.pack(">HHHBBHH", 1, 0, 6, 1, 3, 0, N_HR))
+                hdr = s.recv(7)
+                _t, _p, length, _u = struct.unpack(">HHHB", hdr)
+                body = b""
+                while len(body) < length - 1:
+                    body += s.recv(length - 1 - len(body))
+            regs = struct.unpack(">%dH" % N_HR, body[2:])
+        except (OSError, struct.error) as e:
+            print("FAIL modbus: %s" % e)
+            return 1
+        if regs[HR_FIELD_IO] & 0x0F != 0x0F:
+            print("FAIL fieldIoConnection=0x%04x" % regs[HR_FIELD_IO])
+            return 1
+    print("OK version=%s role=%s last_activity_age_s=%s" % (st["version"], st["role"], st["last_activity_age_s"]))
+    return 0
 
 
 # ---- GPIO / simulation ----
@@ -260,15 +342,28 @@ def simulate(store, stop):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--alliance", choices=ALLIANCES, required=True, help="which hub this Pi reads")
+    ap.add_argument("--alliance", choices=ALLIANCES, help="which hub this Pi reads")
     ap.add_argument("--serve", action="store_true", help="act as the PLC Cheesy Arena talks to (10.0.100.40)")
     ap.add_argument("--peer", help="IP of the other Pi")
     ap.add_argument("--simulate", action="store_true")
     ap.add_argument("--port", type=int, default=CFG["modbus_port"])
+    ap.add_argument("--status-file", default=STATUS_PATH)
+    ap.add_argument("--selfcheck", action="store_true", help="check the running service, exit 0 if healthy")
+    ap.add_argument("--version", action="store_true")
     args = ap.parse_args()
+    if args.version:
+        print(VERSION)
+        return
+    if args.selfcheck:
+        sys.exit(selfcheck(args.status_file, args.serve, args.port))
+    if not args.alliance:
+        ap.error("--alliance is required")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     store, stop = Store(CFG, args.alliance), threading.Event()
+    log.info("fuelhub %s starting (alliance=%s serve=%s)", VERSION, args.alliance, args.serve)
+    threading.Thread(target=status_writer, args=(store, args.status_file, "server" if args.serve else "peer", stop),
+                     daemon=True).start()
     keep = start_gpio(store, CFG) if not args.simulate else None  # noqa: F841
     if args.simulate:
         threading.Thread(target=simulate, args=(store, stop), daemon=True).start()

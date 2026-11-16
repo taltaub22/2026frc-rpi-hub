@@ -10,6 +10,8 @@ fail=0; ok() { echo "ok   $*"; }; bad() { echo "FAIL $*"; fail=1; }
 ping -c1 -W2 "$IP" >/dev/null 2>&1 && ok "ping $IP" || bad "ping $IP"
 ssh -o ConnectTimeout=5 "$user@$IP" 'systemctl is-active fuelhub && hostname' 2>/dev/null | tr '\n' ' ' | grep -q "^active $HOSTNAME_NEW" \
   && ok "service active, hostname $HOSTNAME_NEW" || bad "service/hostname over ssh"
+ssh -o ConnectTimeout=5 "$user@$IP" 'python3 /opt/fuelhub/current/fuelhub.py --selfcheck '"$([[ $SERVE == 1 ]] && echo --serve)" 2>/dev/null \
+  && ok "selfcheck (running version shown above)" || bad "selfcheck"
 if [[ "$SERVE" == 1 ]]; then
   python3 "$root/tools/modbus_probe.py" "$IP" --once && ok "Modbus poll on $IP:502" || bad "Modbus poll"
 else

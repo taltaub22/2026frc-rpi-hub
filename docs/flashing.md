@@ -1,61 +1,61 @@
-# Flashing and provisioning the two Pis
+# Flashing the Pis: zero-touch
 
-Two Pis, one flow. Do server (red, 10.0.100.40) and peer (blue, 10.0.100.41) the same way.
-Everything needed is in this repo; the Pi does NOT need internet (Raspberry Pi OS Lite already
-includes python3-gpiozero and lgpio).
+Goal: flash the SD card, put it in the Pi, power it. No keyboard, mouse, monitor, or SSH session.
+On first boot the Pi sets its own hostname, static IP, SSH key and the fuelhub service (cloud-init,
+built into Raspberry Pi OS Trixie / Imager 2.0+). No internet needed; the code travels on the card.
 
 ## You need
-- microSD card per Pi (16 GB or more, A1/A2 rated), card reader, a laptop with Raspberry Pi Imager
-- The Pi, its PoE HAT (or a USB-C supply for desk work), Ethernet cable
-- Your SSH public key (`~/.ssh/id_ed25519.pub`; create with `ssh-keygen -t ed25519` if you have none)
-- ❓ Pi model: a PoE HAT (not PoE+) fits Pi 3B+/4; a Pi 5 needs the newer PoE+ HAT. Check what is in hand.
+- A microSD card per Pi, a card reader, a laptop with Python 3 and Raspberry Pi Imager 2.0+
+- An SSH public key (`~/.ssh/id_ed25519.pub`; create one with `ssh-keygen -t ed25519`)
+- ❓ Pi model: the plain PoE HAT fits Pi 3B+/4; a Pi 5 needs the PoE+ HAT. Confirm what is in hand.
 
-## 1. Flash the OS
-1. Raspberry Pi Imager: choose your Pi model, then **Raspberry Pi OS Lite (64-bit)**.
-2. Edit settings (Ctrl+Shift+X or "Edit settings"):
-   - Hostname: `fuelhub-red` (server) or `fuelhub-blue` (peer)
-   - Username `pi` (or your own; `verify.sh` takes the username as 2nd argument), and a password
-   - Services: enable SSH, **public-key only**, paste your public key
-   - Wi-Fi: leave empty. Locale/timezone: Asia/Jerusalem
-3. Write. Label the SD card and the Pi "RED / server" or "BLUE / peer".
+## Option A: one command (Imager CLI)
+```
+sudo ./provision/flash.sh server /dev/sdX      # red hub, 10.0.100.40, the "PLC"
+sudo ./provision/flash.sh peer   /dev/sdY      # blue hub, 10.0.100.41
+```
+It generates the config, downloads Raspberry Pi OS Lite (64-bit), and flashes with the config baked in.
+⚠️ The Imager CLI option names (`--cloudinit-userdata`, `--cloudinit-networkconfig`) come from community
+reports, not the man page. The script checks `rpi-imager --help` and falls back to Option B if missing.
 
-## 2. First boot and deploy (laptop on the same network)
-1. Plug the Pi into your laptop's network (a switch with DHCP, or a direct cable; direct needs
-   link-local, `ssh user@fuelhub-red.local` usually works). Wait about 90 s.
-2. From this repo:
+## Option B: Imager GUI + one command (works everywhere)
+1. Raspberry Pi Imager: choose Raspberry Pi OS Lite (64-bit) for your Pi, no customisation needed. Write.
+2. Re-insert the card so the `bootfs` partition mounts, then:
    ```
-   ./provision/deploy.sh server user@fuelhub-red.local     # or: peer user@fuelhub-blue.local
+   ./provision/make_sd_config.py server --boot /Volumes/bootfs     # macOS
+   ./provision/make_sd_config.py peer   --boot /media/$USER/bootfs # Linux
+   python provision\\make_sd_config.py server --boot E:\\            # Windows
    ```
-   This copies the repo, installs `/opt/fuelhub/fuelhub.py`, creates the `fuelhub` user, renders
-   the systemd unit from `provision/roles/<role>.conf`, sets hostname, and sets the static IP
-   (NetworkManager). Add `--no-network` to skip the IP change (for bench work).
-3. `ssh user@fuelhub-red.local sudo reboot`. The Pi now has its static IP (10.0.100.40 / .41).
+   This overwrites `user-data`, `network-config`, `meta-data` on the card. Eject.
+   (Use `--out DIR` instead of `--boot` to just generate the files.)
 
-## 3. Verify (laptop on 10.0.100.0/24)
+## First boot
+Insert the card, connect Ethernet (PoE switch port or a direct cable), power on. About 2 minutes later:
+- hostname `fuelhub-red` / `fuelhub-blue`, static IP 10.0.100.40 / .41 (from `provision/roles/*.conf`)
+- SSH on, key-only, user `pi` (`--user` to change), passwordless sudo
+- journald in RAM (no log writes to the SD card), `fuelhub` service enabled and running
+
+Check from a laptop on 10.0.100.0/24 (set your laptop to e.g. 10.0.100.99/24 for a direct cable):
 ```
-./provision/verify.sh server user
-./provision/verify.sh peer user
+./provision/verify.sh server        # ping, ssh, service, selfcheck, Modbus poll (fieldIoConnection 0x1F)
+./provision/verify.sh peer
 ```
-Checks ping, service active, hostname, and a Modbus poll (28 DI, 11 HR; fieldIoConnection 0x1F).
-Then wire sensors and bench-test (docs/wiring.md, README validation plan).
+If the Pi is not reachable: the config only lives in the first-boot files, so re-flash. The first-boot log is
+in `/var/log/cloud-init-output.log` on the card's root partition (or over SSH once it is up).
 
-## 4. Lock the root filesystem (last step)
-```
-scp provision/lock-root.sh user@10.0.100.40:/tmp/ && ssh -t user@10.0.100.40 sudo /tmp/lock-root.sh
-```
-This enables the overlay filesystem and read-only /boot so a power cut cannot corrupt the card.
-To change anything later, run it with `--unlock`, update, then lock again.
-⚠️ With the overlay on, files written at runtime are lost at reboot. Per-pulse audit CSVs (not built
-yet) will need a separate writable location.
+## After that
+Code updates are over the network, no re-flashing: see `docs/ota.md`.
 
-## Updating the code on a Pi
-`--unlock` (if locked) -> `./provision/deploy.sh <role> user@IP --no-network` -> verify -> lock.
+## Fallback: Pi already running
+Any Pi that already has SSH can be set up with `./provision/deploy.sh server user@host`, which does the same
+install over SSH (add `--no-network` to leave its IP alone).
 
-## Cloning a card instead
-After step 3 works on one Pi you can image the SD card, but you must then change the hostname and
-static IP (re-run deploy.sh for the other role). Flashing fresh from Imager is just as fast.
+## Read-only root filesystem (optional, off by default)
+The plan called for a read-only root to survive power cuts. As built, the Pi keeps a normal writable root
+(so OTA works), with logs in RAM and nothing written while running, which makes corruption unlikely.
+`provision/lock-root.sh` still enables the overlay (read-only) mode, but then OTA needs
+`lock-root.sh --unlock` first (two reboots). ❓ Decide which you prefer; the default favours seamless updates.
 
-## Peer link check
-The peer sends UDP (port 5021) to 10.0.100.40 about 10x/s. On the server Pi,
-`sudo journalctl -u fuelhub -f` shows resets; blue totals appear in holding register 2 via
-`tools/modbus_probe.py 10.0.100.40`.
+## Known unknowns (nothing here has run on a real Pi yet)
+- Ethernet interface name is assumed to be `eth0` (true on Pi OS); edit `network-config` if not.
+- cloud-init `enable_ssh`, `users`, `write_files`, `runcmd` follow Raspberry Pi's documented format.
