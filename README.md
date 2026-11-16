@@ -45,3 +45,6 @@ Recommended: Raspberry Pi OS Lite, fixed IP, read-only root filesystem.
 ## Validation plan
 Bench per channel -> 100-500 balls per hub vs manual count -> edge cases (touching balls, slow balls,
 lighting) -> Modbus client test -> Cheesy Arena test matches -> full dress rehearsal.
+
+## License
+MIT, see `LICENSE`.
