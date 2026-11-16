@@ -3,7 +3,7 @@
 fuelhub.py - REBUILT Fuel hub counter for Raspberry Pi. Emulates the Allen-Bradley PLC that
 Cheesy Arena (main branch, plc/plc.go) talks to over Modbus TCP, so Cheesy Arena needs NO changes.
 
-Register map = plc/plc.go of Cheesy Arena main, commit 248d9de. Cheesy Arena polls ONE
+Register map = plc/plc.go of Cheesy Arena main, commit 4ceffb5 (re-verified 2026-11-17). Cheesy Arena polls ONE
 address every 100 ms:
   FC2 read 28 discrete inputs from 0 | FC3 read 11 holding registers from 0 | FC15 write 13 coils from 0
 
@@ -44,8 +44,10 @@ CFG = {
     "udp_port": 5021,
     "estops_ok": 1,  # 1 = not pressed (inverted inputs). If 0, Cheesy Arena sees E-STOP ACTIVE
     "stations_connected": 1,  # display only (field monitor / team sign)
-    "fta_ready": 1,  # REQUIRED = 1 to start a match (arena.go); later: real dead-man button
-    "field_io_connection": 0x000F,  # REQUIRED: bits 0-3 (redDs, blueDs, redIoLink, blueIoLink)
+    "fta_ready": 1,  # only checked if Settings "FTA ready switch" = Required; later: real dead-man button
+    # Bits 0-3 (redDs, blueDs, redIoLink, blueIoLink) are REQUIRED to start a match.
+    # Bit 4 (ftaReadyConnectedBit, new in 4ceffb5) only drives the FTA badge on the match play page.
+    "field_io_connection": 0x001F,
 }
 ALLIANCES = ("red", "blue")
 

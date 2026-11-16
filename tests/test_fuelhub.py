@@ -23,7 +23,8 @@ class StoreTests(unittest.TestCase):
         di, hr = s.discrete_inputs(), s.holding_registers()
         self.assertTrue(all(di[i] == 1 for i in range(0, 13)))  # E-stops inverted: 1 = not pressed
         self.assertEqual(di[19], 1)  # ftaReady
-        self.assertEqual(hr[0], 0x000F)  # ArmorBlock bits
+        self.assertEqual(hr[0] & 0x0F, 0x0F)  # ArmorBlock bits 0-3 required
+        self.assertEqual(hr[0], 0x1F)  # + ftaReadyConnected bit 4
 
     def test_both_hubs_in_one_map(self):
         s = make("red")
@@ -80,7 +81,7 @@ class ModbusTests(unittest.TestCase):
         self.assertEqual(r[0], 2)
         self.assertEqual(r[1], 4)
         r = self.txn(struct.pack(">BHH", 3, 0, 11))
-        self.assertEqual(struct.unpack(">11H", r[2:])[0], 0x000F)
+        self.assertEqual(struct.unpack(">11H", r[2:])[0], 0x001F)
         # write 13 coils with matchReset (bit 1) set, six cycles -> a single reset
         self.store.pulse(0, now=1.0)
         for _ in range(6):

@@ -6,14 +6,16 @@ Each Pi counts sensor pulses (4 photoelectric sensors per hub) and answers
 Allen-Bradley PLC it already talks to. **Cheesy Arena stays unmodified** (except `network/switch.go`
 for UniFi, tracked separately).
 
-Status: first draft. Passes local tests against the `plc/plc.go` map; NOT yet tested on a Pi,
+Targets Cheesy Arena `main` at 4ceffb5. Status: first draft. Passes local tests against the `plc/plc.go` map; NOT yet tested on a Pi,
 with real sensors, or against a running Cheesy Arena.
 
 ## Layout
 - `src/fuelhub.py` - the counter + Modbus PLC emulator (stdlib only, `gpiozero` for GPIO)
 - `tests/` - unit + Modbus protocol tests (`python3 -m unittest discover -s tests`)
 - `tools/modbus_probe.py` - mimics Cheesy Arena's poll; add `--reset` to test matchReset
-- `deploy/` - systemd units (server / peer) and `install.sh`
+- `deploy/` - `install.sh` (runs on the Pi) and the systemd unit template
+- `provision/` - `deploy.sh` (laptop -> Pi), `verify.sh`, `lock-root.sh`, per-role settings in `roles/`
+- `docs/flashing.md` - **start here to set up a Pi**
 - `docs/wiring.md` - hub box wiring and channel map
 - `docs/cheesy-arena-integration.md` - register map and match-start requirements
 
@@ -31,9 +33,10 @@ python3 src/fuelhub.py --serve --alliance red --simulate --port 5020
 python3 tools/modbus_probe.py 127.0.0.1 --port 5020
 ```
 
-## Install on a Pi
-`sudo ./deploy/install.sh server` (or `peer`). Port 502 is bound via `CAP_NET_BIND_SERVICE`.
-Recommended: Raspberry Pi OS Lite, fixed IP, read-only root filesystem.
+## Set up a Pi
+Flash Raspberry Pi OS Lite 64-bit, then `./provision/deploy.sh server user@fuelhub-red.local`
+(or `peer`), reboot, `./provision/verify.sh server user`, then lock the root filesystem.
+Full steps: `docs/flashing.md`. Port 502 is bound via `CAP_NET_BIND_SERVICE`.
 
 ## To do
 - Bench-measure PC817 module polarity (`active_high`) and tune `refractory_s` (start 30 ms)
