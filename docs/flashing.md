@@ -33,7 +33,8 @@ reports, not the man page. The script checks `rpi-imager --help` and falls back 
 Insert the card, connect Ethernet (PoE switch port or a direct cable), power on. About 2 minutes later:
 - hostname `fuelhub-red` / `fuelhub-blue`, static IP 10.0.100.40 / .41 (from `provision/roles/*.conf`)
 - SSH on, key-only, user `pi` (`--user` to change), passwordless sudo
-- journald in RAM (no log writes to the SD card), `fuelhub` service enabled and running
+- persistent logs (journald, capped at 100 MB, so they survive a power cut), `fuelhub` service enabled and running
+- full read/write root filesystem (no read-only overlay)
 
 Check from a laptop on 10.0.100.0/24 (set your laptop to e.g. 10.0.100.99/24 for a direct cable):
 ```
@@ -49,12 +50,6 @@ Code updates are over the network, no re-flashing: see `docs/ota.md`.
 ## Fallback: Pi already running
 Any Pi that already has SSH can be set up with `./provision/deploy.sh server user@host`, which does the same
 install over SSH (add `--no-network` to leave its IP alone).
-
-## Read-only root filesystem (optional, off by default)
-The plan called for a read-only root to survive power cuts. As built, the Pi keeps a normal writable root
-(so OTA works), with logs in RAM and nothing written while running, which makes corruption unlikely.
-`provision/lock-root.sh` still enables the overlay (read-only) mode, but then OTA needs
-`lock-root.sh --unlock` first (two reboots). ❓ Decide which you prefer; the default favours seamless updates.
 
 ## Known unknowns (nothing here has run on a real Pi yet)
 - Ethernet interface name is assumed to be `eth0` (true on Pi OS); edit `network-config` if not.

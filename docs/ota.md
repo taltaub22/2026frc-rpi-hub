@@ -32,6 +32,5 @@ version, counts and seconds since the last pulse.
 
 ## Limits
 - Needs SSH reachability (laptop on 10.0.100.0/24). No internet needed.
-- Not usable while the root filesystem is locked (`lock-root.sh`); unlock first.
 - Updates the application only. OS, network settings and role changes mean re-flashing (zero-touch, 2 minutes).
 - Updating the same version twice is a no-op; a dirty git tree gets a unique version each time.
